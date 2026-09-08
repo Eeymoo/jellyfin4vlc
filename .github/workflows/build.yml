@@ -87,16 +87,17 @@ jobs:
           install: >-
             git make p7zip curl
             mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-tools
             mingw-w64-ucrt-x86_64-vlc
             mingw-w64-i686-gcc
             mingw-w64-i686-curl
             mingw-w64-i686-binutils
+            mingw-w64-i686-tools
       - name: Build 32-bit libvlccore import library
         run: |
           curl -sLO http://download.videolan.org/pub/videolan/vlc/3.0.21/win32/vlc-3.0.21-win32.7z
           7z x -y vlc-3.0.21-win32.7z vlc-3.0.21/libvlccore.dll > /dev/null
           cd vlc-3.0.21
+          export PATH=/mingw32/bin:$PATH   # use i686 gendef/dlltool
           gendef libvlccore.dll
           dlltool -d libvlccore.def -m i386 -l libvlccore.dll.a
           ls -l libvlccore.dll.a

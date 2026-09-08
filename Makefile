@@ -18,8 +18,10 @@ VLC_LIBS   := $(shell pkg-config --libs vlc-plugin)
 CURL_CFLAGS ?=
 CURL_LIBS  ?= -lcurl
 
-CFLAGS  += -std=gnu11 -Wall -Wextra -fPIC -D_GNU_SOURCE -Isrc $(VLC_CFLAGS) \
-           $(CURL_CFLAGS) -DMODULE_STRING='"jellyfin"'
+# __USE_MINGW_ANSI_STDIO: MinGW needs it for C99 printf formats (%zu);
+# harmless no-op on Linux/macOS.
+CFLAGS  += -std=gnu11 -Wall -Wextra -fPIC -D_GNU_SOURCE -D__USE_MINGW_ANSI_STDIO=1 \
+           -Isrc $(VLC_CFLAGS) $(CURL_CFLAGS) -DMODULE_STRING='"jellyfin"'
 # Plugins must NOT link libvlccore: symbols (vlc_*, module entry) are
 # resolved by the host VLC process at dlopen time.
 LDLIBS   = $(CURL_LIBS)
