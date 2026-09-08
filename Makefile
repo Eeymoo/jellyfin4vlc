@@ -34,9 +34,10 @@ OBJ = $(SRC:.c=.o)
 # Windows (MSYS2/MinGW) VLC plugins are .dll; elsewhere .so
 ifeq ($(OS),Windows_NT)
 PLUGIN := libjellyfin_plugin.dll
-# PE linker refuses undefined symbols by default; VLC plugin symbols
-# (vlc_*, config_*) are resolved by the host VLC process at load time.
-LDFLAGS += -Wl,--unresolved-symbols=ignore-all
+# PE linker refuses undefined symbols: link the libvlccore import library
+# (shipped by mingw vlc packages); at runtime the symbols resolve against
+# the libvlccore.dll already loaded by the host VLC process.
+LDLIBS += $(VLC_LIBS)
 else
 PLUGIN := libjellyfin_plugin.so
 endif
