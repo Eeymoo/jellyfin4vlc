@@ -58,7 +58,7 @@ jobs:
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-vlc
       - name: Build (curl statically linked, no runtime DLL deps)
-        run: make CURL_LIBS="$(curl-config --static-libs)"
+        run: make CURL_CFLAGS="-DCURL_STATICLIB" CURL_LIBS="$(curl-config --static-libs)"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -99,8 +99,7 @@ jobs:
           make CC=i686-w64-mingw32-gcc PLUGIN=libjellyfin_plugin.dll \
             VLC_CFLAGS="-I/ucrt64/include -I/ucrt64/include/vlc/plugins -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE" \
             VLC_LIBS="$PWD/vlc-3.0.21/libvlccore.dll.a" \
-            CURL_CFLAGS="-I/mingw32/include" \
-            CURL_LIBS="$(/mingw32/bin/curl-config --static-libs)"
+            CURL_CFLAGS="-I/mingw32/include -DCURL_STATICLIB" CURL_LIBS="$(/mingw32/bin/curl-config --static-libs)"
           file libjellyfin_plugin.dll || true
       - uses: actions/upload-artifact@v4
         with:
