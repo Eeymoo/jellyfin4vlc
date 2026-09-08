@@ -59,8 +59,7 @@ jobs:
             mingw-w64-ucrt-x86_64-vlc
       - name: Build (curl statically linked, no runtime DLL deps)
         run: |
-          STATIC_LIBS="$(curl-config --static-libs)"
-          [ -n "$(echo $STATIC_LIBS | tr -d '[:space:]')" ] || STATIC_LIBS="-lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz"
+          STATIC_LIBS="-lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz"
           make CURL_CFLAGS="-DCURL_STATICLIB" CURL_LIBS="$STATIC_LIBS"
       - uses: actions/upload-artifact@v4
         with:
