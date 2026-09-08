@@ -23,6 +23,7 @@
 #include <curl/curl.h>
 
 #include "jf_http.h"
+#include "version.h"
 
 typedef struct jf_http_buf
 {
@@ -63,7 +64,7 @@ static int jf_http_perform(const char *url, const char *const *headers,
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_USERAGENT, "jellyfin4vlc/0.1");
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "jellyfin4vlc/" JF_VERSION);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, jf_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); /* enable gzip */

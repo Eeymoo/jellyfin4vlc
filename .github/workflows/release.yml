@@ -1,20 +1,21 @@
-name: build
+name: release
 
+# Push a tag like v0.0.1 to build and publish a GitHub Release with the
+# Linux .so and Windows .dll attached.
 on:
   push:
-  pull_request:
-  workflow_dispatch:
+    tags: ['v*']
+
+permissions:
+  contents: write
 
 jobs:
-  # 主机端单元测试（不需要 VLC 头文件）
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Unit tests
-        run: make test
+      - run: make test
 
-  # Linux: VLC 3.0 插件 (.so)
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -22,15 +23,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          # Debian 13+/Ubuntu 24.04 merged vlc-plugin-dev into libvlccore-dev;
-          # vlc-bin provides the vlc binary + vlc-cache-gen for the smoke test
           sudo apt-get install -y pkg-config libvlccore-dev libcurl4-openssl-dev \
                                   vlc-bin vlc-plugin-base vlc-data
-      - name: Build
-        run: make
-      - name: Smoke test (module registered in vlc --list)
+      - run: make
+      - name: Smoke test
         run: |
-          set -x
           mkdir -p ~/jf/plugins/interface
           cp libjellyfin_plugin.so ~/jf/plugins/interface/
           CACHE_GEN="$(command -v vlc-cache-gen || true)"
@@ -39,11 +36,10 @@ jobs:
           VLC_PLUGIN_PATH=~/jf/plugins vlc -I dummy --list 2>/dev/null | grep -i jellyfin
       - uses: actions/upload-artifact@v4
         with:
-          name: libjellyfin_plugin-linux-amd64
+          name: linux-amd64
           path: libjellyfin_plugin.so
           if-no-files-found: error
 
-  # Windows: VLC 3.0 插件 (.dll), MSYS2 UCRT64
   windows:
     runs-on: windows-latest
     defaults:
@@ -58,13 +54,34 @@ jobs:
           install: >-
             git make
             mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-curl
             mingw-w64-ucrt-x86_64-vlc
-      - name: Build
-        run: make
+      - run: make
       - uses: actions/upload-artifact@v4
         with:
-          name: libjellyfin_plugin-windows-x64
+          name: windows-x64
           path: libjellyfin_plugin.dll
           if-no-files-found: error
+
+  release:
+    needs: [test, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Stage release files
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          mkdir -p release
+          mv dist/linux-amd64/libjellyfin_plugin.so \
+             "release/libjellyfin_plugin-linux-amd64-v${VERSION}.so"
+          mv dist/windows-x64/libjellyfin_plugin.dll \
+             "release/libjellyfin_plugin-windows-x64-v${VERSION}.dll"
+          ls -l release
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_notes: true
+          files: release/*

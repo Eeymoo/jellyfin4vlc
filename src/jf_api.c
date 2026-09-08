@@ -33,6 +33,7 @@
 #include <cJSON.h>
 
 #include "jf_api.h"
+#include "version.h"
 #include "jf_http.h"
 
 #define JF_PAGE_SIZE 500
@@ -70,13 +71,13 @@ static char *jf_authorization_header(const jf_client_t *c, bool with_token)
     if (with_token)
         snprintf(h, cap,
                  "X-Emby-Authorization: MediaBrowser Client=\"jellyfin4vlc\", "
-                 "Device=\"VLC\", DeviceId=\"%s\", Version=\"0.1\", Token=\"%s\"",
-                 c->device_id, c->token);
+                 "Device=\"VLC\", DeviceId=\"%s\", Version=\"%s\", Token=\"%s\"",
+                 c->device_id, JF_VERSION, c->token);
     else
         snprintf(h, cap,
                  "X-Emby-Authorization: MediaBrowser Client=\"jellyfin4vlc\", "
-                 "Device=\"VLC\", DeviceId=\"%s\", Version=\"0.1\"",
-                 c->device_id);
+                 "Device=\"VLC\", DeviceId=\"%s\", Version=\"%s\"",
+                 c->device_id, JF_VERSION);
     return h;
 }
 
