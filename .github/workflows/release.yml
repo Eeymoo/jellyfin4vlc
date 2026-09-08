@@ -64,8 +64,50 @@ jobs:
           path: libjellyfin_plugin.dll
           if-no-files-found: error
 
+  windows-x86:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make p7zip curl
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-tools
+            mingw-w64-ucrt-x86_64-vlc
+            mingw-w64-i686-gcc
+            mingw-w64-i686-curl
+            mingw-w64-i686-binutils
+      - name: Build 32-bit libvlccore import library
+        run: |
+          curl -sLO http://download.videolan.org/pub/videolan/vlc/3.0.21/win32/vlc-3.0.21-win32.7z
+          7z x -y vlc-3.0.21-win32.7z vlc-3.0.21/libvlccore.dll > /dev/null
+          cd vlc-3.0.21
+          gendef libvlccore.dll
+          dlltool -d libvlccore.def -m i386 -l libvlccore.dll.a
+          ls -l libvlccore.dll.a
+      - name: Build
+        run: |
+          export PATH=/mingw32/bin:$PATH
+          make CC=i686-w64-mingw32-gcc PLUGIN=libjellyfin_plugin.dll \
+            VLC_CFLAGS="-I/ucrt64/include -I/ucrt64/include/vlc/plugins -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE" \
+            VLC_LIBS="$PWD/vlc-3.0.21/libvlccore.dll.a" \
+            CURL_CFLAGS="-I/mingw32/include" \
+            CURL_LIBS="-L/mingw32/lib -lcurl"
+          file libjellyfin_plugin.dll || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86
+          path: libjellyfin_plugin.dll
+          if-no-files-found: error
+
   release:
-    needs: [test, linux, windows]
+    needs: [test, linux, windows, windows-x86]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +122,8 @@ jobs:
              "release/libjellyfin_plugin-linux-amd64-v${VERSION}.so"
           mv dist/windows-x64/libjellyfin_plugin.dll \
              "release/libjellyfin_plugin-windows-x64-v${VERSION}.dll"
+          mv dist/windows-x86/libjellyfin_plugin.dll \
+             "release/libjellyfin_plugin-windows-x86-v${VERSION}.dll"
           ls -l release
       - uses: softprops/action-gh-release@v2
         with:
