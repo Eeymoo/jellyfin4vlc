@@ -59,8 +59,9 @@ jobs:
             mingw-w64-ucrt-x86_64-vlc
       - name: Build (curl statically linked, no runtime DLL deps)
         run: |
-          STATIC_LIBS="-lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz"
-          make CURL_CFLAGS="-DCURL_STATICLIB" CURL_LIBS="$STATIC_LIBS"
+          # -Bstatic forces libcurl.a; without it -lcurl picks libcurl.dll.a
+          make CURL_CFLAGS="-DCURL_STATICLIB" \
+            CURL_LIBS="-Wl,-Bstatic -lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -Wl,-Bdynamic -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x64
@@ -101,7 +102,7 @@ jobs:
           make CC=i686-w64-mingw32-gcc PLUGIN=libjellyfin_plugin.dll \
             VLC_CFLAGS="-I/ucrt64/include -I/ucrt64/include/vlc/plugins -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE" \
             VLC_LIBS="$PWD/vlc-3.0.21/libvlccore.dll.a" \
-            CURL_CFLAGS="-I/mingw32/include -DCURL_STATICLIB" CURL_LIBS="-L/mingw32/lib -lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz"
+            CURL_CFLAGS="-I/mingw32/include -DCURL_STATICLIB" CURL_LIBS="-L/mingw32/lib -Wl,-Bstatic -lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -Wl,-Bdynamic -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz"
           file libjellyfin_plugin.dll || true
       - uses: actions/upload-artifact@v4
         with:
