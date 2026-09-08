@@ -1,0 +1,65 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # 主机端单元测试（不需要 VLC 头文件）
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Unit tests
+        run: make test
+
+  # Linux: VLC 3.0 插件 (.so)
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config vlc-plugin-dev libcurl4-openssl-dev
+      - name: Build
+        run: make
+      - name: Smoke test (module registered in vlc --list)
+        run: |
+          mkdir -p ~/jf/plugins/interface
+          cp libjellyfin_plugin.so ~/jf/plugins/interface/
+          VLC_LIBDIR=$(pkg-config --variable=libdir vlc-plugin)
+          "$VLC_LIBDIR/vlc/vlc-cache-gen" ~/jf/plugins
+          VLC_PLUGIN_PATH=~/jf/plugins vlc -I dummy --list 2>/dev/null | grep -i jellyfin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libjellyfin_plugin-linux-amd64
+          path: libjellyfin_plugin.so
+          if-no-files-found: error
+
+  # Windows: VLC 3.0 插件 (.dll), MSYS2 UCRT64
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git make
+            mingw-w64-ucrt-x86_64-toolchain
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-curl
+            mingw-w64-ucrt-x86_64-vlc
+      - name: Build
+        run: make
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libjellyfin_plugin-windows-x64
+          path: libjellyfin_plugin.dll
+          if-no-files-found: error
