@@ -128,6 +128,18 @@ jobs:
              "release/libjellyfin_plugin-windows-x64-v${VERSION}.dll"
           mv dist/windows-x86/libjellyfin_plugin.dll \
              "release/libjellyfin_plugin-windows-x86-v${VERSION}.dll"
+          # Ready-to-use packages: unzip and drop the libjellyfin folder
+          # straight into VLC's plugins/ directory - dll already correctly
+          # named, no renaming needed.
+          for plat in linux-amd64:so windows-x64:dll windows-x86:dll; do
+            name="${plat%%:*}"; ext="${plat##*:}"
+            mkdir -p pkg/libjellyfin
+            cp "release/libjellyfin_plugin-${name}-v${VERSION}.${ext}" \
+               "pkg/libjellyfin/libjellyfin_plugin.${ext}"
+            cp packaging/install-readme.txt pkg/libjellyfin/
+            (cd pkg && zip -r "../release/libjellyfin-${name}-v${VERSION}.zip" libjellyfin)
+            rm -rf pkg/libjellyfin
+          done
           ls -l release
       - uses: softprops/action-gh-release@v2
         with:
