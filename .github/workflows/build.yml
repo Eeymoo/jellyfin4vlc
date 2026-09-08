@@ -108,7 +108,7 @@ jobs:
             VLC_CFLAGS="-I/ucrt64/include -I/ucrt64/include/vlc/plugins -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE" \
             VLC_LIBS="$PWD/vlc-3.0.21/libvlccore.dll.a" \
             CURL_CFLAGS="-I/mingw32/include" \
-            CURL_LIBS="-L/mingw32/lib -lcurl"
+            CURL_LIBS="$(/mingw32/bin/curl-config --static-libs)"
           file libjellyfin_plugin.dll || true
       - uses: actions/upload-artifact@v4
         with:
