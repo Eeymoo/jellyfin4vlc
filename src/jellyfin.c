@@ -72,18 +72,35 @@ vlc_module_begin()
     set_category(CAT_INTERFACE)
     set_subcategory(SUBCAT_INTERFACE_CONTROL)
 
+    set_section(N_("Server"), NULL)
     add_string(CFG_PREFIX"server", "",
                N_("Jellyfin server URL"),
-               N_("Base URL of the Jellyfin server, e.g. http://192.168.1.10:8096"),
+               N_("Base URL of the Jellyfin server, e.g. http://192.168.1.10:8096 "
+                  "or http://example.com/jellyfin (reverse proxy subpath)."),
                false)
     add_string(CFG_PREFIX"username", "",
                N_("Jellyfin user name"),
-               N_("User name used to authenticate against the Jellyfin server"),
+               N_("User name used to authenticate against the Jellyfin server. "
+                  "Only needed on the first run; a token is cached afterwards."),
                false)
     add_password(CFG_PREFIX"password", "",
                  N_("Jellyfin password"),
-                 N_("Password used to authenticate against the Jellyfin server"),
+                 N_("Password used to authenticate against the Jellyfin server. "
+                    "Only needed on the first run; a token is cached afterwards."),
                  false)
+
+    set_section(N_("Behaviour"), NULL)
+    add_bool(CFG_PREFIX"browse", false,
+             N_("Load media library into the playlist on startup"),
+             N_("Fetch all movies/episodes from the server and append them "
+                "to the playlist as direct stream entries."),
+             false)
+    add_integer_with_range(CFG_PREFIX"interval", 10, 5, 120,
+             N_("Progress report interval (seconds)"),
+             N_("How often playback progress is reported to the server."),
+             false)
+
+    set_section(N_("Advanced (auto-cached, no need to edit)"), NULL)
     add_string(CFG_PREFIX"token", "",
                N_("Jellyfin access token (cached)"),
                N_("Access token saved from a previous login; avoids re-sending "
@@ -100,15 +117,6 @@ vlc_module_begin()
                N_("Stable identifier of this installation; generated once "
                   "and cached automatically if left empty."),
                true)
-    add_bool(CFG_PREFIX"browse", false,
-             N_("Load media library into the playlist on startup"),
-             N_("Fetch all movies/episodes from the server and append them "
-                "to the playlist as direct stream entries."),
-             false)
-    add_integer_with_range(CFG_PREFIX"interval", 10, 5, 120,
-             N_("Progress report interval (seconds)"),
-             N_("How often playback progress is reported to the server."),
-             false)
 
     set_callbacks(Open, Close)
 vlc_module_end()

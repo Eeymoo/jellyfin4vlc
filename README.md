@@ -79,7 +79,7 @@ vlc --extraintf jellyfin --jellyfin-server http://192.168.1.10:8096
 
 | 选项 | 默认 | 说明 |
 |---|---|---|
-| `--jellyfin-server` | 空 | 服务器基础 URL |
+| `--jellyfin-server` | 空 | 服务器基础 URL，支持反代子路径（如 `http://example.com/jellyfin`） |
 | `--jellyfin-username` | 空 | 用户名 |
 | `--jellyfin-password` | 空 | 密码（仅首次登录需要） |
 | `--jellyfin-token` | 自动缓存 | AccessToken（advanced） |
