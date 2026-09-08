@@ -21,6 +21,6 @@
 #ifndef JF_VERSION_H
 #define JF_VERSION_H
 
-#define JF_VERSION "0.0.1"
+#define JF_VERSION "0.0.2"
 
 #endif
