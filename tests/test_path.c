@@ -32,24 +32,31 @@ int main(void)
 
     char *id;
 
-    id = jf_item_id_for_path(&l, "/media/movies/Movie One (2020)/movie.mkv");
+    id = jf_item_id_for_path(&l, "/media/movies/Movie One (2020)/movie.mkv", true);
     CHECK(id && !strcmp(id, "aaa-111")); free(id);
 
     /* case-insensitive + trailing slash */
-    id = jf_item_id_for_path(&l, "/MEDIA/MOVIES/movie one (2020)/Movie.MKV/");
+    id = jf_item_id_for_path(&l, "/MEDIA/MOVIES/movie one (2020)/Movie.MKV/", true);
     CHECK(id && !strcmp(id, "aaa-111")); free(id);
 
     /* basename fallback for a different root layout */
-    id = jf_item_id_for_path(&l, "/mnt/jf/remount/s01e01.mkv");
+    id = jf_item_id_for_path(&l, "/mnt/jf/remount/s01e01.mkv", true);
     CHECK(id && !strcmp(id, "bbb-222")); free(id);
 
     /* no match */
-    id = jf_item_id_for_path(&l, "/tmp/unrelated.mp4");
+    id = jf_item_id_for_path(&l, "/tmp/unrelated.mp4", true);
     CHECK(id == NULL); free(id);
 
     /* NULL handling */
-    CHECK(jf_item_id_for_path(&l, NULL) == NULL);
-    CHECK(jf_item_id_for_path(NULL, "/x") == NULL);
+    CHECK(jf_item_id_for_path(&l, NULL, true) == NULL);
+    CHECK(jf_item_id_for_path(NULL, "/x", true) == NULL);
+
+    /* basename fallback disabled: different root must NOT match */
+    id = jf_item_id_for_path(&l, "/mnt/jf/remount/s01e01.mkv", false);
+    CHECK(id == NULL); free(id);
+    /* but the exact path still matches with fallback disabled */
+    id = jf_item_id_for_path(&l, "/media/tv/Show S01E01/s01e01.mkv", false);
+    CHECK(id && !strcmp(id, "bbb-222")); free(id);
 
     /* stream URL */
     jf_client_t c = { .server = strdup("http://jf:8096"),

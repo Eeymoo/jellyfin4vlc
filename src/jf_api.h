@@ -74,9 +74,12 @@ int jf_library_fetch(jf_client_t *c, jf_item_list_t *out,
 void jf_item_list_clear(jf_item_list_t *l);
 
 /* Finds the item whose server-side Path matches the local playing file
- * (case-insensitive, trailing slashes ignored, basename fallback).
- * Returns a malloc'd item id or NULL. */
-char *jf_item_id_for_path(const jf_item_list_t *l, const char *local_path);
+ * (case-insensitive, trailing slashes ignored). If allow_basename is true,
+ * falls back to comparing basenames only (needed when the client cannot see
+ * the server's mount layout, e.g. Windows client + Linux server; may
+ * mismatch identically-named files). Returns a malloc'd item id or NULL. */
+char *jf_item_id_for_path(const jf_item_list_t *l, const char *local_path,
+                          bool allow_basename);
 
 /* Builds the direct-stream URL for an item (owned by caller). */
 char *jf_stream_url(const jf_client_t *c, const char *item_id);

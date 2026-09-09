@@ -86,9 +86,15 @@ static char *jf_authorization_header(const jf_client_t *c, bool with_token)
 static cJSON *jf_get_json(jf_client_t *c, const char *url_path_fmt, ...)
     __attribute__((format(printf, 2, 3)));
 
+/* Performs an HTTP request. Returns a parsed JSON object, or NULL.
+ * Transport / HTTP / JSON failures set *ok = false. An empty body with a
+ * 2xx status (Jellyfin's playback endpoints reply 204 No Content) sets
+ * *ok = true and returns NULL. */
 static cJSON *jf_request_json(jf_client_t *c, const char *url, bool post,
-                              const char *body, char *errbuf, size_t errlen)
+                              const char *body, bool *ok,
+                              char *errbuf, size_t errlen)
 {
+    *ok = false;
     const char *ctype = "Content-Type: application/json";
     char *auth_owned = (c->token != NULL && *c->token)
                      ? jf_authorization_header(c, true)
@@ -120,10 +126,24 @@ static cJSON *jf_request_json(jf_client_t *c, const char *url, bool post,
         return NULL;
     }
 
-    cJSON *json = cJSON_Parse(reply.body ? reply.body : "");
+    /* 2xx: an empty (or whitespace-only) body is a valid success for
+     * endpoints like /Sessions/Playing that return 204 No Content. */
+    const char *p = reply.body;
+    while (p != NULL && *p != '\0' && isspace((unsigned char)*p))
+        p++;
+    if (p == NULL || *p == '\0')
+    {
+        jf_http_reply_clear(&reply);
+        *ok = true;
+        return NULL;
+    }
+
+    cJSON *json = cJSON_Parse(reply.body);
     jf_http_reply_clear(&reply);
     if (json == NULL)
         JF_ERR("invalid JSON response from %s", url);
+    else
+        *ok = true;
     return json;
 }
 
@@ -141,8 +161,9 @@ static cJSON *jf_get_json(jf_client_t *c, const char *url_path_fmt, ...)
     snprintf(url, sizeof(url), "%s%s", c->server, path);
 
     char err[256];
-    cJSON *r = jf_request_json(c, url, false, NULL, err, sizeof(err));
-    return r;
+    bool ok = false;
+    cJSON *r = jf_request_json(c, url, false, NULL, &ok, err, sizeof(err));
+    return (ok && r == NULL) ? cJSON_CreateObject() : r; /* empty page */
 }
 
 /* --- client lifecycle ----------------------------------------------------- */
@@ -195,11 +216,15 @@ int jf_client_login(jf_client_t *c, const char *server, const char *username,
     /* POST without token */
     char *saved_token = c->token;
     c->token = NULL;
-    cJSON *resp = jf_request_json(c, url, true, body_str, errbuf, errlen);
+    bool ok = false;
+    cJSON *resp = jf_request_json(c, url, true, body_str, &ok, errbuf, errlen);
     free(body_str);
     c->token = saved_token; /* restore (NULL unless cached; we get new below) */
-    if (resp == NULL)
+    if (resp == NULL || !ok)
     {
+        if (ok && resp == NULL)
+            JF_ERR("empty authentication response from %s", url);
+        cJSON_Delete(resp);
         jf_client_close(c);
         return -1;
     }
@@ -311,7 +336,7 @@ int jf_library_fetch(jf_client_t *c, jf_item_list_t *out,
         cJSON *page = jf_get_json(c,
             "/Users/%s/Items?Recursive=true"
             "&IncludeItemTypes=Movie,Episode"
-            "&Fields=Path&IncludeMissing=false"
+            "&Fields=Path&IsMissing=false"
             "&EnableImages=false&EnableUserData=false"
             "&Limit=%d&StartIndex=%zu",
             escaped_uid, JF_PAGE_SIZE, start);
@@ -389,7 +414,8 @@ static const char *jf_basename(const char *path)
     return slash ? slash + 1 : path;
 }
 
-char *jf_item_id_for_path(const jf_item_list_t *l, const char *local_path)
+char *jf_item_id_for_path(const jf_item_list_t *l, const char *local_path,
+                          bool allow_basename)
 {
     if (l == NULL || local_path == NULL)
         return NULL;
@@ -418,21 +444,26 @@ char *jf_item_id_for_path(const jf_item_list_t *l, const char *local_path)
         free(have);
     }
 
-    /* Pass 2: basename equality (different mount layouts) */
-    const char *want_base = jf_basename(want);
-    for (size_t i = 0; i < l->count; i++)
+    /* Pass 2 (optional): basename equality only. Useful when the client
+     * cannot see the server's mount layout, but can mismatch
+     * identically-named files in different folders. */
+    if (allow_basename)
     {
-        if (l->items[i].path == NULL)
-            continue;
-        char *have = jf_norm_path(l->items[i].path);
-        if (have != NULL && !strcmp(jf_basename(have), want_base))
+        const char *want_base = jf_basename(want);
+        for (size_t i = 0; i < l->count; i++)
         {
+            if (l->items[i].path == NULL)
+                continue;
+            char *have = jf_norm_path(l->items[i].path);
+            if (have != NULL && !strcmp(jf_basename(have), want_base))
+            {
+                free(have);
+                char *id = strdup(l->items[i].id);
+                free(want);
+                return id;
+            }
             free(have);
-            char *id = strdup(l->items[i].id);
-            free(want);
-            return id;
         }
-        free(have);
     }
 
     free(want);
@@ -475,11 +506,13 @@ static int jf_report(jf_client_t *c, const char *endpoint_suffix,
     cJSON_Delete(body);
 
     char err[256];
-    cJSON *resp = jf_request_json(c, url, true, body_str, err, sizeof(err));
+    bool ok = false;
+    cJSON *resp = jf_request_json(c, url, true, body_str, &ok, err, sizeof(err));
     free(body_str);
     if (resp != NULL)
         cJSON_Delete(resp);
-    return (resp != NULL) ? 0 : -1;
+    /* 204 No Content (the normal success reply) yields ok=true, resp=NULL */
+    return ok ? 0 : -1;
 }
 
 int jf_report_playing(jf_client_t *c, const char *item_id, int64_t ticks)

@@ -26,6 +26,9 @@
  *   3. watch the playlist input; when a Jellyfin-backed file/stream is
  *      playing, report Playing/Progress/Stopped to /Sessions/Playing*
  *
+ * Login and library fetching happen on the background thread (with retry),
+ * so a slow/unreachable server never delays VLC startup.
+ *
  * Modeled after modules/misc/audioscrobbler.c.
  */
 
@@ -33,7 +36,6 @@
 # include "config.h"
 #endif
 
-#include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -95,6 +97,13 @@ vlc_module_begin()
              N_("Fetch all movies/episodes from the server and append them "
                 "to the playlist as direct stream entries."),
              false)
+    add_bool(CFG_PREFIX"basename-fallback", true,
+             N_("Match local files by filename when the full path differs"),
+             N_("Needed when the client cannot see the server's mount layout "
+                "(e.g. Windows client, Linux server). May mismatch "
+                "identically-named files in different folders; disable for "
+                "strict full-path matching only."),
+             false)
     add_integer_with_range(CFG_PREFIX"interval", 10, 5, 120,
              N_("Progress report interval (seconds)"),
              N_("How often playback progress is reported to the server."),
@@ -124,6 +133,7 @@ vlc_module_end()
 /*****************************************************************************
  * Local state
  *****************************************************************************/
+
 /* intf_sys_t is forward-declared (opaque) in vlc_interface.h, so we only
  * provide the struct body here. */
 struct intf_sys_t
@@ -136,17 +146,45 @@ struct intf_sys_t
     jf_client_t    client;
     jf_item_list_t library;       /* path -> item cache, may be empty      */
 
-    /* currently tracked playback */
-    char          *last_uri;      /* URI of the tracked input item          */
-    char          *last_item_id;  /* Jellyfin item id currently reported    */
-    int64_t        last_ticks;    /* last known position in Jellyfin ticks  */
-    vlc_tick_t     last_report;   /* last progress report time              */
-    int            interval;      /* seconds between progress reports       */
+    /* connection settings, owned until the thread is done with them */
+    char          *cfg_server;
+    char          *cfg_username;
+    char          *cfg_password;
+    char          *cfg_token;
+    char          *cfg_userid;
+    char          *cfg_device;
+
+    bool           basename_fallback;
+    bool           browse_on_start;
+    bool           ready;         /* login + library done                  */
+
+    /* currently tracked playback (owned by the background thread) */
+    input_thread_t *last_input;   /* pointer identity: new input = replay  */
+    char          *last_uri;      /* URI of the tracked input item         */
+    char          *last_item_id;  /* Jellyfin item id currently reported   */
+    int64_t        last_ticks;    /* last known position in Jellyfin ticks */
+    vlc_tick_t     last_report;   /* last progress report time             */
+    int            interval;      /* seconds between progress reports      */
 };
 
 /*****************************************************************************
  * Helpers
  *****************************************************************************/
+
+/* Sleep for the given seconds while watching b_die; true = time to exit. */
+static bool jf_die_wait(intf_sys_t *sys, int seconds)
+{
+    for (int i = 0; i < seconds * 2; i++)
+    {
+        vlc_mutex_lock(&sys->lock);
+        bool die = sys->b_die;
+        vlc_mutex_unlock(&sys->lock);
+        if (die)
+            return true;
+        msleep(MS_FROM_VLC_TICK(500));
+    }
+    return false;
+}
 
 /* Return a malloc'd copy of the file path of a "file://" URI (percent
  * decoded), or NULL for non-file URIs. */
@@ -210,18 +248,13 @@ static char *jf_resolve_input(intf_sys_t *sys, input_item_t *item)
         char *path = jf_uri_to_path(uri);
         if (path != NULL)
         {
-            id = jf_item_id_for_path(&sys->library, path);
+            id = jf_item_id_for_path(&sys->library, path,
+                                     sys->basename_fallback);
             free(path);
         }
     }
     free(uri);
     return id;
-}
-
-/* URI of an input item (malloc'd, never NULL on success). */
-static char *jf_input_uri(input_item_t *item)
-{
-    return input_item_GetURI(item);
 }
 
 static void jf_report_stopped_and_clear(intf_sys_t *sys)
@@ -235,6 +268,7 @@ static void jf_report_stopped_and_clear(intf_sys_t *sys)
     }
     free(sys->last_uri);
     sys->last_uri = NULL;
+    sys->last_input = NULL;
     sys->last_ticks = 0;
 }
 
@@ -290,17 +324,66 @@ static char *jf_device_id(vlc_object_t *obj)
     return out;
 }
 
+static char *jf_strdup_opt(const char *s)
+{
+    return (s != NULL && *s) ? strdup(s) : NULL;
+}
+
 /*****************************************************************************
  * Background thread
  *****************************************************************************/
-/* All sys->last_* playback fields are owned exclusively by this thread;
- * the mutex only protects b_die (set from Close()). */
+/* All playback and connection fields (last_*, cfg_*) are owned exclusively
+ * by this thread; the mutex only protects b_die (set from Close()). */
 static void *Run(void *data)
 {
     intf_thread_t *intf = data;
     intf_sys_t *sys = intf->p_sys;
     playlist_t *pl = sys->playlist;
 
+    /* ---- phase 1: connect (login + library), retrying in background ---- */
+    for (;;)
+    {
+        char err[256] = "unknown error";
+        if (jf_client_login(&sys->client, sys->cfg_server, sys->cfg_username,
+                            sys->cfg_password, sys->cfg_token, sys->cfg_userid,
+                            sys->cfg_device ? sys->cfg_device : "vlc-jellyfin",
+                            err, sizeof(err)) == 0)
+            break;
+        msg_Warn(intf, "jellyfin: login failed: %s (retrying in 30s)", err);
+        if (jf_die_wait(sys, 30))
+            return NULL;
+    }
+    msg_Info(intf, "jellyfin: logged in as user %s", sys->client.user_id);
+
+    /* Cache token/user id so the password is only needed on the first run */
+    if (sys->cfg_token == NULL || strcmp(sys->cfg_token, sys->client.token))
+        config_PutPsz(VLC_OBJECT(intf), CFG_PREFIX"token", sys->client.token);
+    if (sys->cfg_userid == NULL || strcmp(sys->cfg_userid, sys->client.user_id))
+        config_PutPsz(VLC_OBJECT(intf), CFG_PREFIX"userid", sys->client.user_id);
+    if (sys->cfg_device != NULL && *sys->cfg_device)
+        config_PutPsz(VLC_OBJECT(intf), CFG_PREFIX"device-id", sys->cfg_device);
+
+    free(sys->cfg_server);   sys->cfg_server   = NULL;
+    free(sys->cfg_username); sys->cfg_username = NULL;
+    free(sys->cfg_password); sys->cfg_password = NULL;
+    free(sys->cfg_token);    sys->cfg_token    = NULL;
+    free(sys->cfg_userid);   sys->cfg_userid   = NULL;
+    free(sys->cfg_device);   sys->cfg_device   = NULL;
+
+    char err[256] = "unknown error";
+    if (jf_library_fetch(&sys->client, &sys->library, err, sizeof(err)) != 0)
+        msg_Warn(intf, "jellyfin: could not fetch library (%s); "
+                       "path-based matching disabled", err);
+    else
+        msg_Info(intf, "jellyfin: loaded %zu library items",
+                 sys->library.count);
+
+    sys->ready = true;
+
+    if (sys->browse_on_start && sys->library.count > 0)
+        jf_browse(sys);
+
+    /* ---- phase 2: watch the playlist input and report playback --------- */
     for (;;)
     {
         input_thread_t *input = playlist_CurrentInput(pl);
@@ -313,10 +396,13 @@ static void *Run(void *data)
             input_item_t *item = input_GetItem(input);
             int state = var_GetInteger(input, "state");
             vlc_tick_t pos_us = var_GetInteger(input, "time");
-            char *uri = item ? jf_input_uri(item) : NULL;
+            char *uri = item ? input_item_GetURI(item) : NULL;
 
+            /* new playback = new input thread OR different URI
+             * (covers replaying the same file) */
             bool changed = (uri != NULL)
-                        && (sys->last_uri == NULL || strcmp(uri, sys->last_uri));
+                        && (input != sys->last_input || sys->last_uri == NULL
+                            || strcmp(uri, sys->last_uri));
 
             if (changed)
             {
@@ -327,6 +413,7 @@ static void *Run(void *data)
                 free(sys->last_uri);
                 sys->last_uri = uri;
                 uri = NULL; /* ownership moved */
+                sys->last_input = input;
                 sys->last_report = 0;
                 sys->last_ticks = 0;
 
@@ -352,20 +439,24 @@ static void *Run(void *data)
                                   "skipping");
                 }
             }
-            else if (item != NULL && sys->last_item_id != NULL)
+            else if (item != NULL)
             {
-                bool due = (mdate() - sys->last_report)
-                           >= VLC_TICK_FROM_SEC(sys->interval);
-                if (due)
+                sys->last_input = input;
+                if (sys->last_item_id != NULL)
                 {
-                    sys->last_report = mdate();
-                    bool paused = (state == PAUSE_S);
-                    int64_t ticks = pos_us > 0 ? pos_us * 10 : 0;
-                    if (jf_report_progress(&sys->client, sys->last_item_id,
-                                           ticks, paused))
-                        msg_Warn(intf, "jellyfin: Progress report failed");
-                    else
-                        sys->last_ticks = ticks;
+                    bool due = (mdate() - sys->last_report)
+                               >= VLC_TICK_FROM_SEC(sys->interval);
+                    if (due)
+                    {
+                        sys->last_report = mdate();
+                        bool paused = (state == PAUSE_S);
+                        int64_t ticks = pos_us > 0 ? pos_us * 10 : 0;
+                        if (jf_report_progress(&sys->client, sys->last_item_id,
+                                               ticks, paused))
+                            msg_Warn(intf, "jellyfin: Progress report failed");
+                        else
+                            sys->last_ticks = ticks;
+                    }
                 }
             }
 
@@ -401,57 +492,50 @@ static int Open(vlc_object_t *obj)
     sys->interval = var_InheritInteger(obj, CFG_PREFIX"interval");
     if (sys->interval < 5)
         sys->interval = 5;
+    sys->basename_fallback = var_InheritBool(obj, CFG_PREFIX"basename-fallback");
+    sys->browse_on_start = var_InheritBool(obj, CFG_PREFIX"browse");
     vlc_mutex_init(&sys->lock);
 
+    /* Copy the connection settings for the background thread; all network
+     * I/O (login, library) happens there so Open never blocks. */
     char *server   = var_InheritString(obj, CFG_PREFIX"server");
-    char *username = var_InheritString(obj, CFG_PREFIX"username");
-    char *password = var_InheritString(obj, CFG_PREFIX"password");
-    char *token    = var_InheritString(obj, CFG_PREFIX"token");
-    char *userid   = var_InheritString(obj, CFG_PREFIX"userid");
-    char *device   = jf_device_id(obj);
-
-    char err[256] = "unknown error";
-    if (jf_client_login(&sys->client, server, username, password, token,
-                        userid, device ? device : "vlc-jellyfin",
-                        err, sizeof(err)) != 0)
+    if (server == NULL || *server == '\0')
     {
-        msg_Err(intf, "jellyfin: login failed: %s", err);
-        free(server); free(username); free(password);
-        free(token); free(userid); free(device);
+        msg_Err(intf, "jellyfin: no server URL configured "
+                      "(--jellyfin-server)");
+        free(server);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_EGENERIC;
     }
-    msg_Info(intf, "jellyfin: logged in as user %s", sys->client.user_id);
+    sys->cfg_server   = server;
+    sys->cfg_username = var_InheritString(obj, CFG_PREFIX"username");
+    sys->cfg_password = var_InheritString(obj, CFG_PREFIX"password");
+    char *tmp;
+    tmp = var_InheritString(obj, CFG_PREFIX"token");
+    sys->cfg_token = jf_strdup_opt(tmp); free(tmp);
+    tmp = var_InheritString(obj, CFG_PREFIX"userid");
+    sys->cfg_userid = jf_strdup_opt(tmp); free(tmp);
+    sys->cfg_device   = jf_device_id(obj);
 
-    /* Cache token/user id so the password is only needed on the first run */
-    if (token == NULL || !*token || strcmp(token, sys->client.token))
-        config_PutPsz(obj, CFG_PREFIX"token", sys->client.token);
-    if (userid == NULL || !*userid || strcmp(userid, sys->client.user_id))
-        config_PutPsz(obj, CFG_PREFIX"userid", sys->client.user_id);
-    if (device != NULL && *device)
-        config_PutPsz(obj, CFG_PREFIX"device-id", device);
-
-    free(server); free(username); free(password);
-    free(token); free(userid); free(device);
+    if ((sys->cfg_username == NULL && (sys->cfg_token == NULL ||
+                                       sys->cfg_userid == NULL)))
+    {
+        msg_Err(intf, "jellyfin: no credentials configured "
+                      "(--jellyfin-username/--jellyfin-password)");
+        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
+        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
+        vlc_mutex_destroy(&sys->lock);
+        free(sys);
+        return VLC_EGENERIC;
+    }
 
     sys->playlist = pl_Get(intf);
 
-    /* Fetch library (needed for path matching and optional browsing) */
-    if (jf_library_fetch(&sys->client, &sys->library, err, sizeof(err)) != 0)
-        msg_Warn(intf, "jellyfin: could not fetch library (%s); "
-                       "path-based matching disabled", err);
-    else
-        msg_Info(intf, "jellyfin: loaded %zu library items",
-                 sys->library.count);
-
-    if (var_InheritBool(obj, CFG_PREFIX"browse") && sys->library.count > 0)
-        jf_browse(sys);
-
     if (vlc_clone(&sys->thread, Run, intf, VLC_THREAD_PRIORITY_LOW))
     {
-        jf_item_list_clear(&sys->library);
-        jf_client_close(&sys->client);
+        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
+        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_ENOMEM;
@@ -471,9 +555,12 @@ static void Close(vlc_object_t *obj)
 
     vlc_join(sys->thread, NULL);
 
+    free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
+    free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
     jf_item_list_clear(&sys->library);
     jf_client_close(&sys->client);
-    vlc_mutex_destroy(&sys->lock);
     free(sys->last_item_id);
+    free(sys->last_uri);
+    vlc_mutex_destroy(&sys->lock);
     free(sys);
 }
