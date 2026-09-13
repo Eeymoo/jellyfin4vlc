@@ -46,6 +46,7 @@
 #include <vlc_interface.h>
 #include <vlc_input.h>
 #include <vlc_playlist.h>
+#include <vlc_services_discovery.h>
 #include <vlc_url.h>
 #include <vlc_threads.h>
 
@@ -66,6 +67,8 @@
  *****************************************************************************/
 static int  Open (vlc_object_t *);
 static void Close(vlc_object_t *);
+static int  OpenSD (vlc_object_t *);
+static void CloseSD(vlc_object_t *);
 
 vlc_module_begin()
     set_shortname(N_("Jellyfin"))
@@ -128,6 +131,16 @@ vlc_module_begin()
                true)
 
     set_callbacks(Open, Close)
+
+    /* Sidebar "Internet" node: browse the Jellyfin library as a tree
+     * (movies grouped under 电影, episodes grouped per series). */
+    add_submodule()
+        set_shortname(N_("Jellyfin"))
+        set_description(N_("Jellyfin media library"))
+        set_capability("services_discovery", 0)
+        set_category(CAT_PLAYLIST)
+        set_subcategory(SUBCAT_PLAYLIST_SD)
+        set_callbacks(OpenSD, CloseSD)
 vlc_module_end()
 
 /*****************************************************************************
@@ -171,14 +184,14 @@ struct intf_sys_t
  * Helpers
  *****************************************************************************/
 
-/* Sleep for the given seconds while watching b_die; true = time to exit. */
-static bool jf_die_wait(intf_sys_t *sys, int seconds)
+/* Sleep for the given seconds while watching a b_die flag; true = exit. */
+static bool jf_die_wait(vlc_mutex_t *lock, bool *die_flag, int seconds)
 {
     for (int i = 0; i < seconds * 2; i++)
     {
-        vlc_mutex_lock(&sys->lock);
-        bool die = sys->b_die;
-        vlc_mutex_unlock(&sys->lock);
+        vlc_mutex_lock(lock);
+        bool die = *die_flag;
+        vlc_mutex_unlock(lock);
         if (die)
             return true;
         msleep(MS_FROM_VLC_TICK(500));
@@ -350,7 +363,7 @@ static void *Run(void *data)
                             err, sizeof(err)) == 0)
             break;
         msg_Warn(intf, "jellyfin: login failed: %s (retrying in 30s)", err);
-        if (jf_die_wait(sys, 30))
+        if (jf_die_wait(&sys->lock, &sys->b_die, 30))
             return NULL;
     }
     msg_Info(intf, "jellyfin: logged in as user %s", sys->client.user_id);
@@ -561,6 +574,174 @@ static void Close(vlc_object_t *obj)
     jf_client_close(&sys->client);
     free(sys->last_item_id);
     free(sys->last_uri);
+    vlc_mutex_destroy(&sys->lock);
+    free(sys);
+}
+
+/*****************************************************************************
+ * Services discovery: Jellyfin library as a sidebar tree
+ *****************************************************************************/
+
+/* services_discovery_sys_t is opaque in vlc_services_discovery.h */
+struct services_discovery_sys_t
+{
+    vlc_thread_t   thread;
+    vlc_mutex_t    lock;
+    bool           b_die;
+
+    services_discovery_t *sd;
+    jf_client_t    client;
+    jf_item_list_t library;
+
+    /* connection settings, owned until the thread is done with them */
+    char *cfg_server, *cfg_username, *cfg_password;
+    char *cfg_token, *cfg_userid, *cfg_device;
+};
+
+static void *RunSD(void *data)
+{
+    services_discovery_t *sd = data;
+    struct services_discovery_sys_t *sys = sd->p_sys;
+
+    /* login with retry */
+    for (;;)
+    {
+        char err[256] = "unknown error";
+        if (jf_client_login(&sys->client, sys->cfg_server, sys->cfg_username,
+                            sys->cfg_password, sys->cfg_token, sys->cfg_userid,
+                            sys->cfg_device ? sys->cfg_device : "vlc-jellyfin",
+                            err, sizeof(err)) == 0)
+            break;
+        msg_Warn(sd, "jellyfin: login failed: %s (retrying in 30s)", err);
+        if (jf_die_wait(&sys->lock, &sys->b_die, 30))
+            return NULL;
+    }
+    msg_Info(sd, "jellyfin: logged in as user %s", sys->client.user_id);
+
+    /* cache the token like the interface module does */
+    if (sys->cfg_token == NULL || strcmp(sys->cfg_token, sys->client.token))
+        config_PutPsz(VLC_OBJECT(sd), CFG_PREFIX"token", sys->client.token);
+    if (sys->cfg_userid == NULL || strcmp(sys->cfg_userid, sys->client.user_id))
+        config_PutPsz(VLC_OBJECT(sd), CFG_PREFIX"userid", sys->client.user_id);
+    if (sys->cfg_device != NULL && *sys->cfg_device)
+        config_PutPsz(VLC_OBJECT(sd), CFG_PREFIX"device-id", sys->cfg_device);
+
+    char err[256] = "unknown error";
+    if (jf_library_fetch(&sys->client, &sys->library, err, sizeof(err)) != 0)
+    {
+        msg_Warn(sd, "jellyfin: could not fetch library: %s", err);
+        return NULL;
+    }
+    msg_Info(sd, "jellyfin: %zu library items available", sys->library.count);
+
+    for (size_t i = 0; i < sys->library.count; i++)
+    {
+        const jf_item_t *it = &sys->library.items[i];
+        char *url = jf_stream_url(&sys->client, it->id);
+        if (url == NULL)
+            continue;
+
+        /* episodes: "SxxEyy - name" under a category per series;
+         * everything else under 电影 */
+        char name[512];
+        char cat[512];
+        if (!strcmp(it->type, "Episode"))
+        {
+            if (it->season > 0 && it->episode > 0)
+                snprintf(name, sizeof(name), "S%02dE%02d - %s",
+                         it->season, it->episode, it->name);
+            else
+                snprintf(name, sizeof(name), "%s", it->name);
+            if (it->series != NULL)
+                snprintf(cat, sizeof(cat), "%s", it->series);
+            else
+                snprintf(cat, sizeof(cat), "Episodes");
+        }
+        else
+        {
+            snprintf(name, sizeof(name), "%s", it->name);
+            snprintf(cat, sizeof(cat), "Movies");
+        }
+
+        input_item_t *item = input_item_New(url, name);
+        if (item != NULL)
+        {
+            services_discovery_AddItemCat(sd, item, cat);
+            input_item_Release(item);
+        }
+        free(url);
+    }
+    return NULL;
+}
+
+static int OpenSD(vlc_object_t *obj)
+{
+    services_discovery_t *sd = (services_discovery_t *)obj;
+    struct services_discovery_sys_t *sys = calloc(1, sizeof(*sys));
+    if (sys == NULL)
+        return VLC_ENOMEM;
+
+    sd->p_sys = sys;
+    sys->sd = sd;
+    vlc_mutex_init(&sys->lock);
+
+    char *server = var_InheritString(obj, CFG_PREFIX"server");
+    if (server == NULL || *server == '\0')
+    {
+        msg_Err(sd, "jellyfin: no server URL configured "
+                    "(--jellyfin-server)");
+        free(server);
+        vlc_mutex_destroy(&sys->lock);
+        free(sys);
+        return VLC_EGENERIC;
+    }
+    sys->cfg_server   = server;
+    sys->cfg_username = var_InheritString(obj, CFG_PREFIX"username");
+    sys->cfg_password = var_InheritString(obj, CFG_PREFIX"password");
+    char *tmp;
+    tmp = var_InheritString(obj, CFG_PREFIX"token");
+    sys->cfg_token = jf_strdup_opt(tmp); free(tmp);
+    tmp = var_InheritString(obj, CFG_PREFIX"userid");
+    sys->cfg_userid = jf_strdup_opt(tmp); free(tmp);
+    sys->cfg_device = jf_device_id(obj);
+
+    if (sys->cfg_username == NULL && (sys->cfg_token == NULL ||
+                                      sys->cfg_userid == NULL))
+    {
+        msg_Err(sd, "jellyfin: no credentials configured");
+        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
+        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
+        vlc_mutex_destroy(&sys->lock);
+        free(sys);
+        return VLC_EGENERIC;
+    }
+
+    if (vlc_clone(&sys->thread, RunSD, sd, VLC_THREAD_PRIORITY_LOW))
+    {
+        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
+        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
+        vlc_mutex_destroy(&sys->lock);
+        free(sys);
+        return VLC_ENOMEM;
+    }
+    return VLC_SUCCESS;
+}
+
+static void CloseSD(vlc_object_t *obj)
+{
+    services_discovery_t *sd = (services_discovery_t *)obj;
+    struct services_discovery_sys_t *sys = sd->p_sys;
+
+    vlc_mutex_lock(&sys->lock);
+    sys->b_die = true;
+    vlc_mutex_unlock(&sys->lock);
+
+    vlc_join(sys->thread, NULL);
+
+    free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
+    free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
+    jf_item_list_clear(&sys->library);
+    jf_client_close(&sys->client);
     vlc_mutex_destroy(&sys->lock);
     free(sys);
 }

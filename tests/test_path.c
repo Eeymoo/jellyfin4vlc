@@ -14,8 +14,10 @@ static int failures;
 
 static jf_item_t mk(const char *id, const char *name, const char *path)
 {
-    jf_item_t it = { strdup(id), strdup(name), path ? strdup(path) : NULL,
-                     strdup("Movie") };
+    jf_item_t it = { .id = strdup(id), .name = strdup(name),
+                     .path = path ? strdup(path) : NULL,
+                     .type = strdup("Movie"), .series = NULL,
+                     .season = 0, .episode = 0 };
     return it;
 }
 
@@ -71,7 +73,7 @@ int main(void)
     for (size_t i = 0; i < 3; i++)
     {
         free(items[i].id); free(items[i].name);
-        free(items[i].path); free(items[i].type);
+        free(items[i].path); free(items[i].type); free(items[i].series);
     }
 
     if (failures == 0)

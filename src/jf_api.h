@@ -38,10 +38,13 @@ typedef struct jf_client
 /* A lightweight media item record used for browsing and path matching. */
 typedef struct jf_item
 {
-    char *id;    /* Jellyfin ItemId (GUID string) */
-    char *name;  /* display name */
-    char *path;  /* server-side file path (may be NULL) */
-    char *type;  /* "Movie", "Episode", ... */
+    char *id;      /* Jellyfin ItemId (GUID string) */
+    char *name;    /* display name */
+    char *path;    /* server-side file path (may be NULL) */
+    char *type;    /* "Movie", "Episode", ... */
+    char *series;  /* series name (episodes only, may be NULL) */
+    int   season;  /* season number (episodes only, 0 if unknown) */
+    int   episode; /* episode number (episodes only, 0 if unknown) */
 } jf_item_t;
 
 typedef struct jf_item_list

@@ -272,14 +272,20 @@ void jf_client_close(jf_client_t *c)
 static void jf_item_fill(jf_item_t *it, const cJSON *ji)
 {
     memset(it, 0, sizeof(*it));
-    const char *id   = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Id"));
-    const char *name = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Name"));
-    const char *path = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Path"));
-    const char *type = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Type"));
-    it->id   = strdup(id ? id : "");
-    it->name = strdup(name ? name : "");
-    it->path = path ? strdup(path) : NULL;
-    it->type = strdup(type ? type : "");
+    const char *id     = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Id"));
+    const char *name   = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Name"));
+    const char *path   = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Path"));
+    const char *type   = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "Type"));
+    const char *series = cJSON_GetStringValue(cJSON_GetObjectItem(ji, "SeriesName"));
+    it->id      = strdup(id ? id : "");
+    it->name    = strdup(name ? name : "");
+    it->path    = path ? strdup(path) : NULL;
+    it->type    = strdup(type ? type : "");
+    it->series  = series ? strdup(series) : NULL;
+    it->season  = (int)cJSON_GetNumberValue(
+                      cJSON_GetObjectItem(ji, "ParentIndexNumber"));
+    it->episode = (int)cJSON_GetNumberValue(
+                      cJSON_GetObjectItem(ji, "IndexNumber"));
 }
 
 static bool jf_item_ok(const jf_item_t *it)
@@ -297,6 +303,7 @@ void jf_item_list_clear(jf_item_list_t *l)
         free(l->items[i].name);
         free(l->items[i].path);
         free(l->items[i].type);
+        free(l->items[i].series);
     }
     free(l->items);
     l->items = NULL;
@@ -336,7 +343,7 @@ int jf_library_fetch(jf_client_t *c, jf_item_list_t *out,
         cJSON *page = jf_get_json(c,
             "/Users/%s/Items?Recursive=true"
             "&IncludeItemTypes=Movie,Episode"
-            "&Fields=Path&IsMissing=false"
+            "&Fields=Path,SeriesName,ParentIndexNumber,IndexNumber&IsMissing=false"
             "&EnableImages=false&EnableUserData=false"
             "&Limit=%d&StartIndex=%zu",
             escaped_uid, JF_PAGE_SIZE, start);
@@ -375,7 +382,7 @@ int jf_library_fetch(jf_client_t *c, jf_item_list_t *out,
             jf_item_fill(&it, ji);
             if (!jf_item_ok(&it))
             {
-                free(it.id); free(it.name); free(it.path); free(it.type);
+                free(it.id); free(it.name); free(it.path); free(it.type); free(it.series);
                 continue;
             }
             out->items[out->count++] = it;
