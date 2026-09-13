@@ -70,6 +70,13 @@ static void Close(vlc_object_t *);
 static int  OpenSD (vlc_object_t *);
 static void CloseSD(vlc_object_t *);
 
+/* Registers "jellyfin" with vlc_sd_GetNames() so the sidebar shows it
+ * (in the Internet group). Without a services probe submodule the SD
+ * module only works via --services-discovery=jellyfin and never
+ * appears in the GUI sidebar. */
+VLC_SD_PROBE_HELPER("jellyfin", N_("Jellyfin media library"),
+                    SD_CAT_INTERNET)
+
 vlc_module_begin()
     set_shortname(N_("Jellyfin"))
     set_description(N_("Jellyfin playback sync"))
@@ -141,6 +148,8 @@ vlc_module_begin()
         set_category(CAT_PLAYLIST)
         set_subcategory(SUBCAT_PLAYLIST_SD)
         set_callbacks(OpenSD, CloseSD)
+
+    VLC_SD_PROBE_SUBMODULE
 vlc_module_end()
 
 /*****************************************************************************
