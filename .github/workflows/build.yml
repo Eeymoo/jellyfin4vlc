@@ -104,7 +104,7 @@ jobs:
         run: |
           export PATH=/mingw32/bin:$PATH
           make CC=i686-w64-mingw32-gcc PLUGIN=libjellyfin_plugin.dll \
-            VLC_CFLAGS="-I/ucrt64/include -I/ucrt64/include/vlc/plugins -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE" \
+            VLC_CFLAGS="-I/mingw64/include -I/mingw64/include/vlc/plugins -D__PLUGIN__ -D_FILE_OFFSET_BITS=64 -D_REENTRANT -D_THREAD_SAFE" \
             VLC_LIBS="$PWD/vlc-3.0.21/libvlccore.dll.a" \
             CURL_CFLAGS="-I/mingw32/include -DCURL_STATICLIB" CURL_LIBS="-L/mingw32/lib -Wl,-Bstatic -lcurl -lssl -lcrypto -lz -lzstd -lbrotlidec -lbrotlicommon -lssh2 -lnghttp2 -lnghttp3 -lngtcp2 -lngtcp2_crypto_ossl -lidn2 -lunistring -lpsl -lunistring -lz -liconv -Wl,-Bdynamic -lws2_32 -lcrypt32 -lwldap32 -lbcrypt -lnormaliz -liphlpapi -lsecur32"
           file libjellyfin_plugin.dll || true
