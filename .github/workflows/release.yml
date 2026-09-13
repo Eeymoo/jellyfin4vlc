@@ -49,14 +49,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
+          msystem: mingw64
           update: true
           install: >-
             git make
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-pkgconf
-            mingw-w64-ucrt-x86_64-curl
-            mingw-w64-ucrt-x86_64-vlc
+            mingw-w64-x86_64-toolchain
+            mingw-w64-x86_64-pkgconf
+            mingw-w64-x86_64-curl
+            mingw-w64-x86_64-vlc
       - name: Build (curl statically linked, no runtime DLL deps)
         run: |
           # -Bstatic forces libcurl.a; without it -lcurl picks libcurl.dll.a
@@ -81,8 +81,7 @@ jobs:
           update: true
           install: >-
             git make p7zip curl
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-vlc
+            mingw-w64-x86_64-vlc
             mingw-w64-i686-gcc
             mingw-w64-i686-curl
             mingw-w64-i686-binutils

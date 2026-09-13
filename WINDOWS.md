@@ -8,13 +8,14 @@ VLC 本身就是 MinGW 构建的）。
 
 1. 安装 [VLC 3.0.x Windows 版](https://www.videolan.org/vlc/downloads-windows.html)
    （默认路径 `C:\Program Files\VideoLAN\VLC`）。
-2. 安装 [MSYS2](https://www.msys2.org/)，打开 **UCRT64** 终端（开始菜单
-   "MSYS2 UCRT64"，注意不是 Mingw64/Clang64 也可以，但下面的包名要对应改）。
+2. 安装 [MSYS2](https://www.msys2.org/)，打开 **MINGW64** 终端（开始菜单 "MSYS2 MINGW64"）。
+   官方 VLC 3.0.x Windows 构建基于 msvcrt，插件必须用 MINGW64（msvcrt）
+   工具链；UCRT64 构建的插件在官方 VLC 里跨 CRT 释放内存会崩溃。
 
 ```sh
 pacman -Syu
-pacman -S mingw-w64-ucrt-x86_64-toolchain make pkgconf \
-          mingw-w64-ucrt-x86_64-curl
+pacman -S mingw-w64-x86_64-toolchain make pkgconf \
+          mingw-w64-x86_64-curl
 ```
 
 ## 二、获取 VLC 插件头文件（二选一）
@@ -24,7 +25,7 @@ VLC 官方 Windows 安装包**不带开发头文件**，两种办法：
 ### 方案 A：MSYS2 的 vlc 包（省事）
 
 ```sh
-pacman -S mingw-w64-ucrt-x86_64-vlc
+pacman -S mingw-w64-x86_64-vlc
 ```
 
 装完后确认 pkg-config 能找到模块：

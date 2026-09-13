@@ -96,8 +96,15 @@ vlc --extraintf jellyfin --jellyfin-browse \
     --jellyfin-username alice --jellyfin-password secret
 ```
 
-也可以在 GUI 里勾选 *Tools → Preferences (All) → Interface → Control
-interfaces → Jellyfin playback sync* 持久启用（`--extraintf jellyfin` 同义）。
+### GUI 持久启用（命令行参数不会持久化）
+
+*Tools → Preferences (All)*：
+
+- **Interface → Control interfaces** → Extra interface modules 填 `jellyfin`（进度同步）
+- **Playlist → Services discovery** → 勾选 **Jellyfin media library**（侧边栏媒体库）
+- **Interface → Control interfaces → Jellyfin playback sync** 节点填 `jellyfin-server` / `jellyfin-username` / `jellyfin-password`
+
+等价 vlcrc 配置项：`extraintf=jellyfin`、`services-discovery=jellyfin`、`jellyfin-server=...`、`jellyfin-username=...`（首次登录后 token 自动缓存，无需密码）。
 
 ## 验证
 

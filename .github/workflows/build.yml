@@ -86,8 +86,7 @@ jobs:
           update: true
           install: >-
             git make p7zip curl
-            mingw-w64-ucrt-x86_64-toolchain
-            mingw-w64-ucrt-x86_64-vlc
+            mingw-w64-x86_64-vlc
             mingw-w64-i686-gcc
             mingw-w64-i686-curl
             mingw-w64-i686-binutils

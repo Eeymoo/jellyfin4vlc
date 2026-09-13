@@ -249,7 +249,12 @@ static char *jf_uri_to_item_id(const intf_sys_t *sys, const char *uri)
 /* Resolve a playing input item to a Jellyfin item id (malloc'd or NULL). */
 static char *jf_resolve_input(intf_sys_t *sys, input_item_t *item)
 {
-    char *uri = input_item_GetURI(item);
+    /* input_item_GetURI() returns libvlccore memory; copy it with our own
+     * CRT so we can free our copy safely, and leak the tiny original. */
+    const char *vuri = input_item_GetURI(item);
+    if (vuri == NULL)
+        return NULL;
+    char *uri = strdup(vuri);
     if (uri == NULL)
         return NULL;
 
@@ -279,8 +284,7 @@ static void jf_report_stopped_and_clear(intf_sys_t *sys)
         free(sys->last_item_id);
         sys->last_item_id = NULL;
     }
-    free(sys->last_uri);
-    sys->last_uri = NULL;
+    sys->last_uri = NULL; /* libvlccore-owned, intentionally not freed */
     sys->last_input = NULL;
     sys->last_ticks = 0;
 }
@@ -311,14 +315,21 @@ static void jf_browse(intf_sys_t *sys)
 
 /* Generate/cached a stable device id: use the config value if present,
  * otherwise derive one from the config dir path. */
+/* NOTE on memory ownership: strings returned by var_InheritString(),
+ * config_GetUserDir(), config_PutPsz() targets and input_item_GetURI()
+ * are allocated by libvlccore with VLC's own CRT. Freeing them with our
+ * CRT corrupts the heap (official VLC 3.0.x Windows builds use msvcrt;
+ * a ucrt plugin must not release them). These strings are tiny and
+ * per-session, so they are intentionally never freed. Memory we
+ * allocate ourselves (strdup/asprintf/cJSON/curl/jf_* results) is freed
+ * normally. */
 static char *jf_device_id(vlc_object_t *obj)
 {
     char *id = var_InheritString(obj, CFG_PREFIX"device-id");
     if (id != NULL && *id != '\0')
-        return id;
-    free(id);
+        return id; /* libvlccore-owned, not freed */
 
-    char *path = config_GetUserDir(VLC_CACHE_DIR);
+    const char *path = config_GetUserDir(VLC_CACHE_DIR);
     if (path == NULL)
         return strdup("vlc-jellyfin-default");
 
@@ -329,7 +340,6 @@ static char *jf_device_id(vlc_object_t *obj)
         h ^= (unsigned char)*p;
         h *= 1099511628211ULL;
     }
-    free(path);
 
     char *out;
     if (asprintf(&out, "vlc-jf-%016" PRIx64, h) < 0)
@@ -337,9 +347,11 @@ static char *jf_device_id(vlc_object_t *obj)
     return out;
 }
 
-static char *jf_strdup_opt(const char *s)
+/* Normalize a possibly-NULL/empty libvlccore string to NULL without
+ * copying (the original stays libvlccore-owned and is never freed). */
+static char *jf_norm(char *s)
 {
-    return (s != NULL && *s) ? strdup(s) : NULL;
+    return (s != NULL && *s) ? s : NULL;
 }
 
 /*****************************************************************************
@@ -376,12 +388,7 @@ static void *Run(void *data)
     if (sys->cfg_device != NULL && *sys->cfg_device)
         config_PutPsz(VLC_OBJECT(intf), CFG_PREFIX"device-id", sys->cfg_device);
 
-    free(sys->cfg_server);   sys->cfg_server   = NULL;
-    free(sys->cfg_username); sys->cfg_username = NULL;
-    free(sys->cfg_password); sys->cfg_password = NULL;
-    free(sys->cfg_token);    sys->cfg_token    = NULL;
-    free(sys->cfg_userid);   sys->cfg_userid   = NULL;
-    free(sys->cfg_device);   sys->cfg_device   = NULL;
+    /* cfg_* were libvlccore-owned; intentionally not freed. */
 
     char err[256] = "unknown error";
     if (jf_library_fetch(&sys->client, &sys->library, err, sizeof(err)) != 0)
@@ -409,13 +416,13 @@ static void *Run(void *data)
             input_item_t *item = input_GetItem(input);
             int state = var_GetInteger(input, "state");
             vlc_tick_t pos_us = var_GetInteger(input, "time");
-            char *uri = item ? input_item_GetURI(item) : NULL;
 
-            /* new playback = new input thread OR different URI
-             * (covers replaying the same file) */
-            bool changed = (uri != NULL)
-                        && (input != sys->last_input || sys->last_uri == NULL
-                            || strcmp(uri, sys->last_uri));
+            /* A new media always spawns a new input thread, so pointer
+             * identity is enough to detect a new playback (including
+             * replaying the same file). input_item_GetURI() returns
+             * libvlccore memory that must not be freed with our CRT, so
+             * it is only fetched once per playback and kept for debug. */
+            bool changed = (item != NULL) && (input != sys->last_input);
 
             if (changed)
             {
@@ -423,9 +430,7 @@ static void *Run(void *data)
                 char *old = sys->last_item_id;
                 int64_t old_ticks = sys->last_ticks;
                 sys->last_item_id = NULL;
-                free(sys->last_uri);
-                sys->last_uri = uri;
-                uri = NULL; /* ownership moved */
+                sys->last_uri = input_item_GetURI(item); /* kept, not freed */
                 sys->last_input = input;
                 sys->last_report = 0;
                 sys->last_ticks = 0;
@@ -473,7 +478,6 @@ static void *Run(void *data)
                 }
             }
 
-            free(uri);
             vlc_object_release(input);
         }
 
@@ -516,19 +520,17 @@ static int Open(vlc_object_t *obj)
     {
         msg_Err(intf, "jellyfin: no server URL configured "
                       "(--jellyfin-server)");
-        free(server);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_EGENERIC;
     }
+    /* cfg_* strings are libvlccore-owned (var_InheritString/jf_device_id);
+     * they are normalized to NULL via jf_norm() and never freed here. */
     sys->cfg_server   = server;
-    sys->cfg_username = var_InheritString(obj, CFG_PREFIX"username");
-    sys->cfg_password = var_InheritString(obj, CFG_PREFIX"password");
-    char *tmp;
-    tmp = var_InheritString(obj, CFG_PREFIX"token");
-    sys->cfg_token = jf_strdup_opt(tmp); free(tmp);
-    tmp = var_InheritString(obj, CFG_PREFIX"userid");
-    sys->cfg_userid = jf_strdup_opt(tmp); free(tmp);
+    sys->cfg_username = jf_norm(var_InheritString(obj, CFG_PREFIX"username"));
+    sys->cfg_password = jf_norm(var_InheritString(obj, CFG_PREFIX"password"));
+    sys->cfg_token    = jf_norm(var_InheritString(obj, CFG_PREFIX"token"));
+    sys->cfg_userid   = jf_norm(var_InheritString(obj, CFG_PREFIX"userid"));
     sys->cfg_device   = jf_device_id(obj);
 
     if ((sys->cfg_username == NULL && (sys->cfg_token == NULL ||
@@ -536,8 +538,6 @@ static int Open(vlc_object_t *obj)
     {
         msg_Err(intf, "jellyfin: no credentials configured "
                       "(--jellyfin-username/--jellyfin-password)");
-        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
-        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_EGENERIC;
@@ -547,8 +547,6 @@ static int Open(vlc_object_t *obj)
 
     if (vlc_clone(&sys->thread, Run, intf, VLC_THREAD_PRIORITY_LOW))
     {
-        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
-        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_ENOMEM;
@@ -568,12 +566,10 @@ static void Close(vlc_object_t *obj)
 
     vlc_join(sys->thread, NULL);
 
-    free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
-    free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
+    /* cfg_ and last_uri strings were libvlccore-owned; intentionally not freed. */
     jf_item_list_clear(&sys->library);
     jf_client_close(&sys->client);
     free(sys->last_item_id);
-    free(sys->last_uri);
     vlc_mutex_destroy(&sys->lock);
     free(sys);
 }
@@ -685,32 +681,26 @@ static int OpenSD(vlc_object_t *obj)
     sys->sd = sd;
     vlc_mutex_init(&sys->lock);
 
-    char *server = var_InheritString(obj, CFG_PREFIX"server");
-    if (server == NULL || *server == '\0')
+    /* cfg_* strings are libvlccore-owned; normalized to NULL, never freed */
+    sys->cfg_server   = var_InheritString(obj, CFG_PREFIX"server");
+    if (sys->cfg_server == NULL || *sys->cfg_server == '\0')
     {
         msg_Err(sd, "jellyfin: no server URL configured "
                     "(--jellyfin-server)");
-        free(server);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_EGENERIC;
     }
-    sys->cfg_server   = server;
-    sys->cfg_username = var_InheritString(obj, CFG_PREFIX"username");
-    sys->cfg_password = var_InheritString(obj, CFG_PREFIX"password");
-    char *tmp;
-    tmp = var_InheritString(obj, CFG_PREFIX"token");
-    sys->cfg_token = jf_strdup_opt(tmp); free(tmp);
-    tmp = var_InheritString(obj, CFG_PREFIX"userid");
-    sys->cfg_userid = jf_strdup_opt(tmp); free(tmp);
-    sys->cfg_device = jf_device_id(obj);
+    sys->cfg_username = jf_norm(var_InheritString(obj, CFG_PREFIX"username"));
+    sys->cfg_password = jf_norm(var_InheritString(obj, CFG_PREFIX"password"));
+    sys->cfg_token    = jf_norm(var_InheritString(obj, CFG_PREFIX"token"));
+    sys->cfg_userid   = jf_norm(var_InheritString(obj, CFG_PREFIX"userid"));
+    sys->cfg_device   = jf_device_id(obj);
 
     if (sys->cfg_username == NULL && (sys->cfg_token == NULL ||
                                       sys->cfg_userid == NULL))
     {
         msg_Err(sd, "jellyfin: no credentials configured");
-        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
-        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_EGENERIC;
@@ -718,8 +708,6 @@ static int OpenSD(vlc_object_t *obj)
 
     if (vlc_clone(&sys->thread, RunSD, sd, VLC_THREAD_PRIORITY_LOW))
     {
-        free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
-        free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
         vlc_mutex_destroy(&sys->lock);
         free(sys);
         return VLC_ENOMEM;
@@ -738,8 +726,7 @@ static void CloseSD(vlc_object_t *obj)
 
     vlc_join(sys->thread, NULL);
 
-    free(sys->cfg_server); free(sys->cfg_username); free(sys->cfg_password);
-    free(sys->cfg_token); free(sys->cfg_userid); free(sys->cfg_device);
+    /* cfg_* were libvlccore-owned; intentionally not freed. */
     jf_item_list_clear(&sys->library);
     jf_client_close(&sys->client);
     vlc_mutex_destroy(&sys->lock);
