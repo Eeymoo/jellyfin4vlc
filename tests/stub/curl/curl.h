@@ -12,8 +12,12 @@ typedef enum {
     CURLOPT_CONNECTTIMEOUT, CURLOPT_USERAGENT, CURLOPT_WRITEFUNCTION,
     CURLOPT_WRITEDATA, CURLOPT_ACCEPT_ENCODING, CURLOPT_HTTPHEADER,
     CURLOPT_POST, CURLOPT_POSTFIELDS, CURLOPT_POSTFIELDSIZE,
+    CURLOPT_ERRORBUFFER, CURLOPT_CAINFO,
+    CURLOPT_SSL_VERIFYPEER, CURLOPT_SSL_VERIFYHOST,
     CURLINFO_RESPONSE_CODE,
 } CURLoption;
+
+#define CURL_ERROR_SIZE 256
 
 struct curl_slist { char *data; struct curl_slist *next; };
 
@@ -25,6 +29,7 @@ void    curl_easy_cleanup(CURL *curl);
 CURLcode curl_easy_setopt(CURL *curl, CURLoption option, ...);
 CURLcode curl_easy_perform(CURL *curl);
 CURLcode curl_easy_getinfo(CURL *curl, CURLoption info, ...);
+const char *curl_easy_strerror(CURLcode errornum);
 struct curl_slist *curl_slist_append(struct curl_slist *l, const char *s);
 void    curl_slist_free_all(struct curl_slist *l);
 char   *curl_easy_escape(CURL *curl, const char *s, int len);
