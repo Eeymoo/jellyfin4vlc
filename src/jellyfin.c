@@ -51,6 +51,7 @@
 #include <vlc_threads.h>
 
 #include "jf_api.h"
+#include "jf_http.h"
 
 #define CFG_PREFIX "jellyfin-"
 
@@ -106,6 +107,12 @@ vlc_module_begin()
              N_("Load media library into the playlist on startup"),
              N_("Fetch all movies/episodes from the server and append them "
                 "to the playlist as direct stream entries."),
+             false)
+    add_bool(CFG_PREFIX"insecure", false,
+             N_("Skip TLS certificate verification (not recommended)"),
+             N_("Disable HTTPS certificate and hostname checks. Only use "
+                "this with self-signed servers you trust; the connection "
+                "is still encrypted but vulnerable to man-in-the-middle."),
              false)
     add_bool(CFG_PREFIX"basename-fallback", true,
              N_("Match local files by filename when the full path differs"),
@@ -520,6 +527,7 @@ static int Open(vlc_object_t *obj)
         sys->interval = 5;
     sys->basename_fallback = var_InheritBool(obj, CFG_PREFIX"basename-fallback");
     sys->browse_on_start = var_InheritBool(obj, CFG_PREFIX"browse");
+    jf_http_set_insecure(var_InheritBool(obj, CFG_PREFIX"insecure"));
     vlc_mutex_init(&sys->lock);
 
     /* Copy the connection settings for the background thread; all network
@@ -705,6 +713,9 @@ static int OpenSD(vlc_object_t *obj)
     sys->cfg_token    = jf_norm(var_InheritString(obj, CFG_PREFIX"token"));
     sys->cfg_userid   = jf_norm(var_InheritString(obj, CFG_PREFIX"userid"));
     sys->cfg_device   = jf_device_id(obj);
+
+    if (var_InheritBool(obj, CFG_PREFIX"insecure"))
+        jf_http_set_insecure(true);
 
     if (sys->cfg_username == NULL && (sys->cfg_token == NULL ||
                                       sys->cfg_userid == NULL))

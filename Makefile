@@ -40,6 +40,30 @@ PLUGIN := libjellyfin_plugin.dll
 # (shipped by mingw vlc packages); at runtime the symbols resolve against
 # the libvlccore.dll already loaded by the host VLC process.
 LDLIBS += $(VLC_LIBS)
+
+# Statically link libcurl so the DLL has no runtime DLL dependencies.
+# This is not optional: VLC loads plugins with LOAD_LIBRARY_SEARCH_SYSTEM32,
+# so a plugin that needs libcurl-4.dll (or libgcc/libstdc++/libwinpthread)
+# from its own directory fails to load with error 126.
+#
+# Ask pkg-config for the exact --static link line of whichever libcurl
+# variant is installed (MSYS2 ships 'curl' = OpenSSL and 'curl-winssl' =
+# Schannel; their private dependency lists differ), force the archives
+# with -Wl,-Bstatic, then close with the system libraries. Falls back to
+# plain -lcurl when pkg-config has no libcurl.pc.
+# Override on the make command line if your libcurl is a different build
+# (release.yml passes its own CURL_LIBS for exactly this reason).
+CURL_CFLAGS := -DCURL_STATICLIB
+CURL_PC_LIBS := $(shell pkg-config --libs --static libcurl 2>/dev/null | sed -e 's/-L[^ ][^ ]*//g')
+ifeq ($(strip $(CURL_PC_LIBS)),)
+CURL_LIBS := -lcurl
+else
+CURL_LIBS := -Wl,-Bstatic $(CURL_PC_LIBS) \
+             -Wl,-Bdynamic -lwldap32 -lbcrypt -ladvapi32 -lcrypt32 \
+             -lsecur32 -lws2_32 -liphlpapi -lnormaliz \
+             -static-libgcc -static-libstdc++
+endif
+LDLIBS := $(CURL_LIBS) $(VLC_LIBS)
 else
 PLUGIN := libjellyfin_plugin.so
 endif

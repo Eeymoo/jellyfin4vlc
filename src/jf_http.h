@@ -21,6 +21,7 @@
 #ifndef JF_HTTP_H
 #define JF_HTTP_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 typedef struct jf_http_reply
@@ -28,6 +29,7 @@ typedef struct jf_http_reply
     long  code;       /* HTTP status code, 0 on transport error */
     char *body;       /* NUL-terminated response body (malloc'd), may be NULL */
     size_t size;      /* body length in bytes */
+    char  err[256];   /* transport error detail (libcurl), empty on success */
 } jf_http_reply_t;
 
 /* Both functions return 0 on transport success (check reply->code for HTTP
@@ -39,5 +41,10 @@ int jf_http_post(const char *url, const char *const *headers, size_t nheaders,
                  const char *body, size_t body_len, jf_http_reply_t *reply);
 
 void jf_http_reply_clear(jf_http_reply_t *reply);
+
+/* Disable TLS certificate/hostname verification for all subsequent
+ * requests (jellyfin-insecure). Intended for self-signed servers and
+ * for diagnosing TLS failures together with reply->err. */
+void jf_http_set_insecure(bool insecure);
 
 #endif

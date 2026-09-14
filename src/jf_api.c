@@ -116,7 +116,7 @@ static cJSON *jf_request_json(jf_client_t *c, const char *url, bool post,
 
     if (rc != 0)
     {
-        JF_ERR("network error contacting %s", url);
+        JF_ERR("network error contacting %s (%s)", url, reply.err);
         return NULL;
     }
     if (reply.code < 200 || reply.code >= 300)
