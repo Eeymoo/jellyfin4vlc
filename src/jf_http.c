@@ -17,6 +17,8 @@
 # include "config.h"
 #endif
 
+#include <stdbool.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -24,6 +26,11 @@
 
 #include "jf_http.h"
 #include "version.h"
+
+#ifdef _WIN32
+# include <wchar.h>
+# include <windows.h>
+#endif
 
 typedef struct jf_http_buf
 {
@@ -46,6 +53,84 @@ static size_t jf_write_cb(char *ptr, size_t size, size_t nmemb, void *opaque)
     return len;
 }
 
+/* Locate a CA certificate bundle for HTTPS peer verification.
+ *
+ * The Windows build statically links libcurl against OpenSSL (MSYS2
+ * MINGW64), whose compiled-in default trust store points to MSYS2 paths
+ * that do not exist on end-user machines.  Without a CA store every
+ * https:// request fails with a certificate verification error, while
+ * plain http:// keeps working — a confusing half-broken state.
+ *
+ * Resolution order:
+ *   1. JELLYFIN4VLC_CAINFO environment variable (full override)
+ *   2. cacert.pem sitting next to the plugin DLL (shipped in the zip)
+ * Returns true and fills `out` if a candidate exists, false otherwise
+ * (system trust store is left to its own defaults, e.g. Linux). */
+static bool jf_find_cacert(char *out, size_t outlen)
+{
+    const char *env = getenv("JELLYFIN4VLC_CAINFO");
+    if (env != NULL && *env != '\0')
+    {
+        FILE *f = fopen(env, "rb");
+        if (f != NULL)
+        {
+            fclose(f);
+            snprintf(out, outlen, "%s", env);
+            return true;
+        }
+    }
+
+#ifdef _WIN32
+    /* Resolve our own DLL path so we can look for cacert.pem next to it.
+     * GetModuleHandleEx with FROM_ADDRESS returns the HMODULE of the DLL
+     * that contains this function. */
+    HMODULE mod;
+    if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)(void *)&jf_find_cacert, &mod))
+    {
+        wchar_t wpath[MAX_PATH];
+        DWORD n = GetModuleFileNameW(mod, wpath, MAX_PATH);
+        if (n > 0 && n < MAX_PATH)
+        {
+            /* strip the file name, keep the directory */
+            for (DWORD i = n; i-- > 0; )
+                if (wpath[i] == L'\\' || wpath[i] == L'/')
+                {
+                    wpath[i] = L'\0';
+                    break;
+                }
+            const wchar_t *file = L"\\cacert.pem";
+            if (wcslen(wpath) + wcslen(file) < MAX_PATH)
+            {
+                wcscat(wpath, file);
+                int len = WideCharToMultiByte(CP_UTF8, 0, wpath, -1,
+                                              NULL, 0, NULL, NULL);
+                if (len > 0 && (size_t)len <= outlen)
+                {
+                    char *tmp = malloc(len);
+                    if (tmp != NULL)
+                    {
+                        WideCharToMultiByte(CP_UTF8, 0, wpath, -1,
+                                            tmp, len, NULL, NULL);
+                        FILE *f = fopen(tmp, "rb");
+                        if (f != NULL)
+                        {
+                            fclose(f);
+                            snprintf(out, outlen, "%s", tmp);
+                            free(tmp);
+                            return true;
+                        }
+                        free(tmp);
+                    }
+                }
+            }
+        }
+    }
+#endif
+    return false;
+}
+
 static int jf_http_perform(const char *url, const char *const *headers,
                            size_t nheaders, const char *post_body,
                            size_t post_len, jf_http_reply_t *reply)
@@ -58,6 +143,7 @@ static int jf_http_perform(const char *url, const char *const *headers,
 
     jf_http_buf_t buf = { .data = NULL, .size = 0 };
     struct curl_slist *hl = NULL;
+    char errbuf[CURL_ERROR_SIZE] = "";
 
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -68,6 +154,14 @@ static int jf_http_perform(const char *url, const char *const *headers,
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, jf_write_cb);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &buf);
     curl_easy_setopt(curl, CURLOPT_ACCEPT_ENCODING, ""); /* enable gzip */
+    curl_easy_setopt(curl, CURLOPT_ERRORBUFFER, errbuf);
+
+    /* Windows: point OpenSSL at a CA bundle we ship next to the DLL
+     * (see jf_find_cacert).  Without this, https:// fails on machines
+     * that lack the MSYS2 trust store the static OpenSSL was built for. */
+    char cacert[1024];
+    if (jf_find_cacert(cacert, sizeof(cacert)))
+        curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
 
     for (size_t i = 0; i < nheaders; i++)
         hl = curl_slist_append(hl, headers[i]);
@@ -93,6 +187,8 @@ static int jf_http_perform(const char *url, const char *const *headers,
 
     if (rc != CURLE_OK)
     {
+        snprintf(reply->err, sizeof(reply->err), "%s",
+                 errbuf[0] != '\0' ? errbuf : curl_easy_strerror(rc));
         jf_http_reply_clear(reply);
         return -1;
     }

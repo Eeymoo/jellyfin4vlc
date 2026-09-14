@@ -6,6 +6,9 @@ libjellyfin_plugin 安装说明
    Windows: C:\Program Files\VideoLAN\VLC\plugins\
    Linux:   /usr/lib/x86_64-linux-gnu/vlc/plugins/
    （文件夹名字 libjellyfin 可以不改，VLC 会递归扫描所有子目录）
+   注意保持 cacert.pem 与 dll 在同一文件夹 —— Windows 版内嵌的
+   OpenSSL 没有系统证书库，靠它校验 https 服务器证书；
+   也可通过环境变量 JELLYFIN4VLC_CAINFO 指定自定义证书 bundle。
 
 2. 刷新插件缓存 —— 注意：Windows 上请使用绝对路径调用，
    相对路径会静默生成空缓存（不报错但插件不生效）：
