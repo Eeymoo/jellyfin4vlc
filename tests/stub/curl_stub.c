@@ -8,6 +8,7 @@ void curl_easy_cleanup(CURL *c) { (void)c; }
 CURLcode curl_easy_setopt(CURL *c, CURLoption o, ...) { (void)c; (void)o; return CURLE_OK; }
 CURLcode curl_easy_perform(CURL *c) { (void)c; return CURLE_OK; }
 CURLcode curl_easy_getinfo(CURL *c, CURLoption o, ...) { (void)c; (void)o; return CURLE_OK; }
+const char *curl_easy_strerror(CURLcode c) { (void)c; return "stub error"; }
 struct curl_slist *curl_slist_append(struct curl_slist *l, const char *s) { (void)s; return l; }
 void curl_slist_free_all(struct curl_slist *l) { (void)l; }
 char *curl_easy_escape(CURL *c, const char *s, int len)
