@@ -40,6 +40,21 @@ PLUGIN := libjellyfin_plugin.dll
 # (shipped by mingw vlc packages); at runtime the symbols resolve against
 # the libvlccore.dll already loaded by the host VLC process.
 LDLIBS += $(VLC_LIBS)
+
+# Statically link libcurl so the DLL has no runtime DLL dependencies.
+# This is not optional: VLC loads plugins with LOAD_LIBRARY_SEARCH_SYSTEM32,
+# so a plugin that needs libcurl-4.dll (or libgcc/libstdc++/libwinpthread)
+# from its own directory fails to load with error 126. The flags below
+# match MSYS2's curl-winssl package (Schannel TLS backend, no OpenSSL).
+# Override on the make command line if your libcurl is a different build
+# (release.yml passes its own CURL_LIBS for exactly this reason).
+CURL_CFLAGS := -DCURL_STATICLIB
+CURL_LIBS   := -Wl,-Bstatic -lcurl -lssh2 -lcares -lidn2 -lunistring -liconv \
+               -lpsl -lbrotlidec -lbrotlicommon -lzstd -lz \
+               -Wl,-Bdynamic -lwldap32 -lbcrypt -ladvapi32 -lcrypt32 \
+               -lsecur32 -lws2_32 -liphlpapi -lnormaliz \
+               -static-libgcc -static-libstdc++
+LDLIBS := $(CURL_LIBS) $(VLC_LIBS)
 else
 PLUGIN := libjellyfin_plugin.so
 endif
