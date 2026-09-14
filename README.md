@@ -86,6 +86,7 @@ vlc --extraintf jellyfin --jellyfin-server http://192.168.1.10:8096
 | `--jellyfin-userid` | 自动缓存 | 用户 ID（advanced） |
 | `--jellyfin-device-id` | 自动生成 | 上报给服务器的设备标识（advanced） |
 | `--jellyfin-browse` | 关 | 启动时把媒体库追加到播放列表 |
+| `--jellyfin-insecure` | 关 | 跳过 HTTPS 证书/主机名校验（仅自签服务器调试用，有中间人风险） |
 | `--jellyfin-interval` | 10 | 进度上报间隔（秒，5–120） |
 
 示例——在 VLC 里直接浏览并同步：
