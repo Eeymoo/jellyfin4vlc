@@ -8,6 +8,11 @@
  * the Free Software Foundation; either version 2.1 of the License, or
  * (at your option) any later version.
  *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Lesser General Public License for more details.
+ *
  * You should have received a copy of the GNU Lesser General Public License
  * along with this program; if not, write to the Free Software Foundation,
  * Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
@@ -131,6 +136,16 @@ static bool jf_find_cacert(char *out, size_t outlen)
     return false;
 }
 
+/* Insecure TLS mode (--jellyfin-insecure): skip certificate and hostname
+ * verification.  Global because jf_http has no per-client context; set
+ * once at module startup before any request. */
+static bool s_insecure;
+
+void jf_http_set_insecure(bool insecure)
+{
+    s_insecure = insecure;
+}
+
 static int jf_http_perform(const char *url, const char *const *headers,
                            size_t nheaders, const char *post_body,
                            size_t post_len, jf_http_reply_t *reply)
@@ -162,6 +177,12 @@ static int jf_http_perform(const char *url, const char *const *headers,
     char cacert[1024];
     if (jf_find_cacert(cacert, sizeof(cacert)))
         curl_easy_setopt(curl, CURLOPT_CAINFO, cacert);
+
+    if (s_insecure)
+    {
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYPEER, 0L);
+        curl_easy_setopt(curl, CURLOPT_SSL_VERIFYHOST, 0L);
+    }
 
     for (size_t i = 0; i < nheaders; i++)
         hl = curl_slist_append(hl, headers[i]);
